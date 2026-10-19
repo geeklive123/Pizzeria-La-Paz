@@ -1,0 +1,97 @@
+<?php
+
+namespace App\Services;
+
+use App\Data\ReportDateRange;
+use App\Enums\InventoryMovementType;
+use App\Enums\OrderItemStatus;
+use App\Models\Branch;
+use App\Models\Company;
+use App\Models\InventoryMovement;
+use App\Models\OrderItem;
+use App\Support\UiFormatter;
+use Brick\Math\BigDecimal;
+use Illuminate\Support\Collection;
+
+class ProfitabilityReportService
+{
+    public function __construct(
+        private readonly SalesReportService $sales,
+        private readonly ExpenseReportService $expenses,
+        private readonly InventoryReportService $inventory,
+        private readonly InternalConsumptionReportService $internalConsumptions,
+        private readonly ReportDecimalService $decimal,
+    ) {}
+
+    public function data(Company $company, Branch $branch, ReportDateRange $range, array $filters = []): array
+    {
+        $sales = $this->sales->data($company, $branch, $range, $filters);
+        $items = OrderItem::query()->forCompany($company)->where('branch_id', $branch->id)
+            ->whereIn('id', $sales['recognized_item_ids'])->where('status', '!=', OrderItemStatus::Cancelled->value)
+            ->with(['productVariant.product', 'kitchenDispatchItem'])->get();
+        $movements = InventoryMovement::query()->forCompany($company)->where('branch_id', $branch->id)
+            ->where('type', InventoryMovementType::OrderConsumption->value)->whereDoesntHave('reversals')
+            ->where('reference_type', OrderItem::class)->whereIn('reference_id', $items->pluck('id'))->get(['reference_id', 'total_cost']);
+        $costsByItem = $movements->groupBy('reference_id')->map(fn (Collection $group) => $this->sum($group, 'total_cost'));
+        $byVariant = $items->groupBy(function (OrderItem $item): string|int {
+            $promotionUlid = $item->configuration_snapshot['promotion']['ulid'] ?? null;
+            $extraUlid = $item->configuration_snapshot['extra']['ulid'] ?? null;
+
+            return $promotionUlid ? 'promotion:'.$promotionUlid
+                : ($extraUlid ? 'extra:'.$extraUlid : $item->product_variant_id);
+        })->map(function (Collection $group) use ($costsByItem): array {
+            $first = $group->first();
+            $revenue = $this->sumNetRevenue($group);
+            $cost = BigDecimal::zero();
+            foreach ($group as $item) {
+                $cost = $cost->plus($costsByItem->get($item->id, '0.00'));
+            }
+            $cost = $this->decimal->money((string) $cost);
+
+            return [
+                'name' => $first->configuration_snapshot['promotion']['name']
+                    ?? $first->configuration_snapshot['extra']['name']
+                    ?? $first->productVariant->product->name.' · '.UiFormatter::variantName($first->productVariant->name, $first->productVariant->size_key),
+                'revenue' => $revenue,
+                'estimated_cost' => $cost,
+                'estimated_margin' => $this->decimal->subtract($revenue, $cost),
+            ];
+        })->sort(fn (array $left, array $right) => BigDecimal::of($right['estimated_margin'])->compareTo($left['estimated_margin']))->values();
+
+        $productionCost = $this->sum($movements, 'total_cost');
+        $expenseTotal = $this->expenses->data($company, $branch, $range, $filters)['total'];
+        $wasteCost = $this->inventory->waste($company, $branch, $range)['total_cost'];
+        $internalConsumptions = $this->internalConsumptions->period($company, $branch, $range);
+
+        return [
+            'sales' => $sales['sales_total'],
+            'production_cost' => $productionCost,
+            'expenses' => $expenseTotal,
+            'waste_cost' => $wasteCost,
+            'internal_consumptions' => $internalConsumptions,
+            'estimated_result' => $this->decimal->subtract($sales['sales_total'], $productionCost, $expenseTotal, $wasteCost, $internalConsumptions['known_cost']),
+            'by_variant' => $byVariant,
+            'methodology' => 'Ventas cobradas menos costo histórico de consumo comercial, consumos internos, gastos operativos y mermas. Las compras no se restan nuevamente.',
+        ];
+    }
+
+    private function sum(iterable $rows, string $attribute): string
+    {
+        $total = BigDecimal::zero();
+        foreach ($rows as $row) {
+            $total = $total->plus($row->{$attribute});
+        }
+
+        return $this->decimal->money((string) $total);
+    }
+
+    private function sumNetRevenue(iterable $items): string
+    {
+        $total = BigDecimal::zero();
+        foreach ($items as $item) {
+            $total = $total->plus($item->kitchenDispatchItem?->net_total ?? $item->line_total);
+        }
+
+        return $this->decimal->money((string) $total);
+    }
+}

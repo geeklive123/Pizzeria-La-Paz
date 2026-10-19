@@ -1,0 +1,526 @@
+const sidebar = document.querySelector('#sidebar');
+const backdrop = document.querySelector('#sidebar-backdrop');
+const sidebarToggle = document.querySelector('#sidebar-toggle');
+const mobileSidebar = window.matchMedia('(max-width: 1023px)');
+const setSidebarOpen = (isOpen) => {
+    sidebar?.classList.toggle('-translate-x-full', !isOpen);
+    backdrop?.classList.toggle('hidden', !isOpen);
+    sidebarToggle?.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+    if (sidebar) sidebar.inert = mobileSidebar.matches && !isOpen;
+    if (isOpen) sidebar?.focus({ preventScroll: true });
+};
+
+sidebarToggle?.addEventListener('click', () => {
+    setSidebarOpen(sidebar?.classList.contains('-translate-x-full') ?? false);
+});
+backdrop?.addEventListener('click', () => setSidebarOpen(false));
+sidebar?.querySelectorAll('a').forEach((link) => {
+    link.addEventListener('click', () => {
+        if (mobileSidebar.matches) setSidebarOpen(false);
+    });
+});
+document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && !sidebar?.classList.contains('-translate-x-full')) {
+        setSidebarOpen(false);
+        sidebarToggle?.focus();
+    }
+});
+if (sidebar) sidebar.inert = mobileSidebar.matches;
+mobileSidebar.addEventListener('change', () => {
+    setSidebarOpen(false);
+});
+
+document.querySelectorAll('[data-nav-group]').forEach((group) => {
+    const button = group.querySelector('[data-nav-group-toggle]');
+    const panel = group.querySelector('[data-nav-group-panel]');
+    const navigation = group.closest('[data-sidebar-navigation]');
+    const storageKey = `pizzeria-sidebar:${navigation?.dataset.navigationScope}:${group.dataset.navKey}`;
+    const active = group.dataset.active === 'true';
+    let stored = null;
+    try {
+        stored = localStorage.getItem(storageKey);
+    } catch {
+        stored = null;
+    }
+
+    const setExpanded = (expanded, persist = false) => {
+        group.dataset.expanded = expanded ? 'true' : 'false';
+        button?.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+        panel?.setAttribute('aria-hidden', expanded ? 'false' : 'true');
+        if (panel) panel.inert = !expanded;
+        if (persist) {
+            try {
+                localStorage.setItem(storageKey, expanded ? 'open' : 'closed');
+            } catch {
+                // Storage can be unavailable in private or restricted browser contexts.
+            }
+        }
+    };
+
+    setExpanded(active || stored === 'open');
+    button?.addEventListener('click', () => {
+        setExpanded(group.dataset.expanded !== 'true', true);
+    });
+});
+
+const orderHistoryModal = document.querySelector('[data-order-history-modal]');
+document.querySelector('[data-order-history-open]')?.addEventListener('click', () => {
+    orderHistoryModal?.showModal();
+});
+document.querySelectorAll('[data-order-history-close]').forEach((button) => {
+    button.addEventListener('click', () => orderHistoryModal?.close());
+});
+orderHistoryModal?.addEventListener('click', (event) => {
+    if (event.target === orderHistoryModal) orderHistoryModal.close();
+});
+
+const filterPosProducts = () => {
+    const term = document.querySelector('[data-pos-search]')?.value.toLocaleLowerCase() ?? '';
+    const category = document.querySelector('[data-pos-category].is-active')?.dataset.posCategory ?? 'all';
+    document.querySelectorAll('[data-pos-product]').forEach((product) => {
+        const matchesTerm = product.dataset.name.includes(term);
+        const matchesCategory = category === 'all' || product.dataset.category === category;
+        product.classList.toggle('hidden', !matchesTerm || !matchesCategory);
+    });
+};
+const closePizzaComposers = () => {
+    document.querySelectorAll('[data-pizza-composer]').forEach((composer) => { composer.hidden = true; });
+};
+
+document.querySelector('[data-pos-search]')?.addEventListener('input', () => {
+    closePizzaComposers();
+    filterPosProducts();
+});
+document.querySelectorAll('[data-pos-category]').forEach((button, index) => {
+    if (index === 0) button.classList.add('is-active');
+    button.addEventListener('click', () => {
+        closePizzaComposers();
+        document.querySelectorAll('[data-pos-category]').forEach((candidate) => candidate.classList.remove('is-active'));
+        button.classList.add('is-active');
+        filterPosProducts();
+    });
+});
+
+document.querySelectorAll('[data-pizza-composer]').forEach((composer) => {
+    const size = composer.querySelector('[data-pizza-size]');
+    const sizeOptions = [...composer.querySelectorAll('[data-pizza-size-option]')];
+    const rows = [...composer.querySelectorAll('[data-pizza-section]')];
+    const form = composer.querySelector('[data-pizza-form]');
+    const error = composer.querySelector('[data-pizza-error]');
+    const price = composer.querySelector('[data-pizza-price]');
+    const basePrice = composer.querySelector('[data-pizza-base-price]');
+    const extrasPrice = composer.querySelector('[data-pizza-extras-price]');
+    const toppings = [...composer.querySelectorAll('[data-pizza-topping]')];
+    const compatibility = composer.querySelector('[data-pizza-compatibility]');
+    const combineToggle = composer.querySelector('[data-pizza-combine-toggle]');
+    const combination = composer.querySelector('[data-pizza-combination]');
+    const optionTemplates = new Map(
+        [...composer.querySelectorAll('[data-pizza-options]')].map((template) => [template.dataset.pizzaOptions, template]),
+    );
+    let sectionCount = 1;
+
+    const resetCombination = () => {
+        sectionCount = 1;
+        if (combination) combination.hidden = true;
+        rows.slice(1).forEach((row) => {
+            const variant = row.querySelector('[data-pizza-variant]');
+            variant.value = '';
+        });
+    };
+
+    const loadOptions = (select, sizeKey) => {
+        if (select.dataset.loadedSizeKey === sizeKey) return;
+        const template = optionTemplates.get(sizeKey);
+        select.replaceChildren(...[...template.content.querySelectorAll('option')].map((option) => option.cloneNode(true)));
+        select.dataset.loadedSizeKey = sizeKey;
+    };
+
+    const sectionLabel = (index) => {
+        if (sectionCount === 1) return 'Sabor';
+        if (sectionCount === 2) return `Mitad ${index + 1}`;
+        if (sectionCount === 3) return `Parte ${index + 1} de 3`;
+        return `Cuarto ${index + 1}`;
+    };
+
+    const priceInCents = (value) => {
+        const [whole = '0', decimals = ''] = String(value).split('.');
+        return BigInt(whole) * 100n + BigInt(decimals.padEnd(2, '0').slice(0, 2));
+    };
+
+    const formatCents = (value) => `Bs ${(value / 100n).toString()},${(value % 100n).toString().padStart(2, '0')}`;
+
+    const toppingPrice = (topping) => {
+        const sizePrices = JSON.parse(topping.dataset.sizePrices || '{}');
+        return priceInCents(sizePrices[size.value] ?? topping.dataset.priceDefault ?? '0');
+    };
+
+    const refresh = () => {
+        sizeOptions.forEach((option) => { option.checked = option.value === size.value; });
+        const canCombine = ['mediana', 'familiar'].includes(size.value);
+        if (combineToggle) combineToggle.hidden = !canCombine;
+        if (!canCombine && sectionCount > 1) resetCombination();
+        const availableForSize = optionTemplates.get(size.value)?.content.querySelectorAll('option[data-size-key]').length ?? 0;
+        composer.querySelectorAll('[data-pizza-section-count]').forEach((button) => {
+            button.disabled = Number(button.dataset.pizzaSectionCount) > availableForSize;
+        });
+        if (compatibility) {
+            compatibility.hidden = availableForSize !== 1;
+            compatibility.textContent = availableForSize === 1
+                ? 'Solo hay 1 sabor disponible para este tamaño. Configura el mismo tamaño en otros sabores para poder combinarlos.'
+                : '';
+        }
+        if (sectionCount > availableForSize) sectionCount = Math.max(1, availableForSize);
+
+        const selected = new Set();
+
+        rows.forEach((row, index) => {
+            const active = index < sectionCount;
+            row.hidden = !active;
+            const variant = row.querySelector('[data-pizza-variant]');
+            loadOptions(variant, size.value);
+            row.querySelectorAll('input, select').forEach((field) => { field.disabled = !active; });
+            if (active) {
+                const current = variant.value;
+                [...variant.options].forEach((option) => {
+                    option.disabled = option.value !== '' && selected.has(option.value) && option.value !== current;
+                });
+                if (variant.selectedOptions[0]?.disabled || selected.has(variant.value)) variant.value = '';
+                if (variant.value) selected.add(variant.value);
+                row.querySelector('[data-pizza-section-label]').textContent = sectionLabel(index);
+                const selectedOption = variant.selectedOptions[0];
+                row.querySelector('[data-pizza-availability]').textContent = selectedOption?.dataset.availabilityMode === 'recipe_pending'
+                    ? 'Receta pendiente: no se reservarán ingredientes de este sabor.'
+                    : selectedOption
+                        ? `Disponibilidad estimada del sabor: ${selectedOption.dataset.availability}`
+                        : 'No hay otro sabor disponible para este tamaño.';
+            }
+        });
+
+        rows.slice(0, sectionCount).forEach((row) => {
+            const variant = row.querySelector('[data-pizza-variant]');
+            const current = variant.value;
+            [...variant.options].forEach((option) => {
+                option.disabled = option.value !== '' && selected.has(option.value) && option.value !== current;
+            });
+        });
+
+        const prices = rows.slice(0, sectionCount)
+            .map((row) => row.querySelector('[data-pizza-variant]').selectedOptions[0]?.dataset.price)
+            .filter(Boolean)
+            .map(priceInCents);
+        const pizzaCents = prices.length > 0
+            ? prices.reduce((highest, candidate) => candidate > highest ? candidate : highest, 0n)
+            : null;
+        let toppingCents = 0n;
+        toppings.forEach((topping) => {
+            const cents = toppingPrice(topping);
+            topping.closest('label')?.querySelector('[data-topping-price-label]')
+                ?.replaceChildren(document.createTextNode(`+ ${formatCents(cents)}`));
+            if (topping.checked) toppingCents += cents;
+        });
+        basePrice.textContent = pizzaCents === null ? '—' : formatCents(pizzaCents);
+        extrasPrice.textContent = formatCents(toppingCents);
+        price.textContent = pizzaCents === null ? '—' : formatCents(pizzaCents + toppingCents);
+        error.hidden = true;
+        error.textContent = '';
+
+        composer.querySelectorAll('[data-pizza-section-count]').forEach((button) => {
+            button.classList.toggle('is-active', button.dataset.pizzaSectionCount === String(sectionCount));
+        });
+    };
+
+    composer.querySelectorAll('[data-pizza-section-count]').forEach((button) => {
+        button.addEventListener('click', () => {
+            sectionCount = parseInt(button.dataset.pizzaSectionCount, 10);
+            refresh();
+        });
+    });
+    combineToggle?.addEventListener('click', () => {
+        if (!['mediana', 'familiar'].includes(size.value)) return;
+        combination.hidden = false;
+        sectionCount = 2;
+        refresh();
+    });
+    composer.querySelector('[data-close-pizza-combination]')?.addEventListener('click', () => {
+        resetCombination();
+        refresh();
+    });
+    const changePizzaSize = (sizeKey) => {
+        if (!optionTemplates.has(sizeKey)) return;
+        const selectedProductId = rows[0].querySelector('[data-pizza-variant]').selectedOptions[0]?.dataset.productId;
+        size.value = sizeKey;
+        rows.forEach((row) => {
+            const variant = row.querySelector('[data-pizza-variant]');
+            delete variant.dataset.loadedSizeKey;
+            variant.replaceChildren();
+        });
+        resetCombination();
+        refresh();
+        const compatibleFlavor = [...rows[0].querySelector('[data-pizza-variant]').options]
+            .find((option) => option.dataset.productId === selectedProductId);
+        if (compatibleFlavor) rows[0].querySelector('[data-pizza-variant]').value = compatibleFlavor.value;
+        refresh();
+    };
+    sizeOptions.forEach((option) => option.addEventListener('change', () => {
+        if (option.checked) changePizzaSize(option.value);
+    }));
+    toppings.forEach((topping) => topping.addEventListener('change', refresh));
+    rows.forEach((row) => row.querySelector('[data-pizza-variant]')?.addEventListener('change', refresh));
+    form?.addEventListener('submit', (event) => {
+        const flavors = rows.slice(0, sectionCount).map((row) => row.querySelector('[data-pizza-variant]').value);
+        if (flavors.some((flavor) => !flavor) || new Set(flavors).size !== flavors.length) {
+            event.preventDefault();
+            error.textContent = 'Ese sabor ya está seleccionado. Elige otro sabor o utiliza la opción "1 sabor".';
+            error.hidden = false;
+            error.focus();
+        }
+    });
+    composer.querySelector('[data-close-pizza-composer]')?.addEventListener('click', () => {
+        composer.hidden = true;
+    });
+    composer.addEventListener('pizza:open', (event) => {
+        composer.hidden = false;
+        toppings.forEach((topping) => { topping.checked = false; });
+        changePizzaSize(event.detail.sizeKey);
+        rows[0].querySelector('[data-pizza-variant]').value = event.detail.variant;
+        refresh();
+        composer.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        composer.focus({ preventScroll: true });
+    });
+    refresh();
+});
+
+document.querySelectorAll('[data-open-pizza-composer]').forEach((button) => {
+    button.addEventListener('click', () => {
+        document.querySelector('[data-pizza-composer]')?.dispatchEvent(new CustomEvent('pizza:open', {
+            detail: { sizeKey: button.dataset.pizzaSizeKey, variant: button.dataset.pizzaVariant, productId: button.dataset.pizzaProductId },
+        }));
+    });
+});
+
+document.querySelectorAll('[data-open-promotion-composer]').forEach((button) => {
+    const composer = button.closest('[data-pos-product]')?.querySelector('[data-promotion-composer]');
+    button.addEventListener('click', () => {
+        document.querySelectorAll('[data-promotion-composer]').forEach((candidate) => { candidate.hidden = candidate !== composer; });
+        if (composer) {
+            composer.hidden = false;
+            composer.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+    });
+    composer?.querySelector('[data-close-promotion-composer]')?.addEventListener('click', () => { composer.hidden = true; });
+});
+
+document.querySelectorAll('[data-promotion-pizza]').forEach((pizza) => {
+    const count = pizza.querySelector('[data-promotion-section-count]');
+    const sections = [...pizza.querySelectorAll('[data-promotion-section]')];
+    const refresh = () => {
+        const active = Number(count?.value ?? 1);
+        sections.forEach((section, index) => {
+            const enabled = index < active;
+            section.hidden = !enabled;
+            section.querySelectorAll('select, input').forEach((field) => { field.disabled = !enabled; });
+        });
+    };
+    count?.addEventListener('change', refresh);
+    refresh();
+});
+
+document.querySelectorAll('[data-payment-selector]').forEach((selector) => {
+    const forms = [...selector.querySelectorAll('[data-payment-form]')];
+    const buttons = [...selector.querySelectorAll('[data-payment-method]')];
+    buttons.forEach((button) => button.addEventListener('click', () => {
+        forms.forEach((form) => { form.hidden = form.dataset.paymentForm !== button.dataset.paymentMethod; });
+        buttons.forEach((candidate) => candidate.classList.toggle('is-active', candidate === button));
+        buttons.forEach((candidate) => candidate.setAttribute('aria-pressed', candidate === button ? 'true' : 'false'));
+    }));
+    forms.forEach((form) => form.addEventListener('submit', (event) => {
+        if (form.dataset.submitting === 'true') {
+            event.preventDefault();
+            return;
+        }
+        form.dataset.submitting = 'true';
+        const submit = form.querySelector('button[type="submit"]');
+        if (submit) {
+            submit.disabled = true;
+            submit.textContent = 'Registrando pago…';
+        }
+    }));
+});
+
+const decimalToCents = (value) => {
+    const normalized = String(value).trim().replace(',', '.');
+    if (!/^\d+(?:\.\d{0,2})?$/.test(normalized)) return null;
+    const [whole, fraction = ''] = normalized.split('.');
+    return BigInt(whole) * 100n + BigInt(fraction.padEnd(2, '0'));
+};
+
+document.querySelectorAll('[data-cash-payment]').forEach((form) => {
+    const amount = form.querySelector('[name="amount"]');
+    const received = form.querySelector('[name="received_amount"]');
+    const output = form.querySelector('[data-cash-change]');
+    const refreshChange = () => {
+        const amountCents = decimalToCents(amount.value);
+        const receivedCents = decimalToCents(received.value);
+        const change = amountCents !== null && receivedCents !== null && receivedCents > amountCents
+            ? receivedCents - amountCents
+            : 0n;
+        output.textContent = `Bs ${(change / 100n).toString()},${(change % 100n).toString().padStart(2, '0')}`;
+    };
+    amount.addEventListener('input', refreshChange);
+    received.addEventListener('input', refreshChange);
+    refreshChange();
+});
+
+document.addEventListener('click', (event) => {
+    const quantityButton = event.target.closest('[data-quantity-step]');
+    if (quantityButton) {
+        const input = quantityButton.closest('form')?.querySelector('[data-quantity-input]');
+        if (input) {
+            const normalized = /^\d+(?:\.\d+)?$/.test(input.value.trim()) ? input.value.trim() : '1';
+            const [whole, fraction = ''] = normalized.split('.');
+            const scale = fraction.length;
+            const factor = 10n ** BigInt(scale);
+            const current = BigInt(whole) * factor + BigInt(fraction || '0');
+            const next = current + BigInt(quantityButton.dataset.quantityStep) * factor;
+            const safe = next < factor ? factor : next;
+            const nextWhole = safe / factor;
+            const nextFraction = scale > 0 ? (safe % factor).toString().padStart(scale, '0') : '';
+            input.value = scale > 0 ? `${nextWhole}.${nextFraction}` : nextWhole.toString();
+        }
+    }
+
+    const addButton = event.target.closest('[data-add-row]');
+    if (addButton) {
+        const name = addButton.dataset.addRow;
+        const container = document.querySelector(`[data-rows="${name}"]`);
+        const template = document.querySelector(`#${name}-template`);
+        if (container && template) {
+            const index = container.querySelectorAll('[data-row]').length;
+            container.insertAdjacentHTML('beforeend', template.innerHTML.replaceAll('__INDEX__', index));
+        }
+    }
+
+    const removeButton = event.target.closest('[data-remove-row]');
+    if (removeButton) {
+        const container = removeButton.closest('[data-rows]');
+        if (!container || container.querySelectorAll('[data-row]').length > 1) {
+            removeButton.closest('[data-row]')?.remove();
+        }
+    }
+});
+
+const preparationMilliunits = (value) => {
+    const normalized = String(value).trim().replace(',', '.');
+    if (!/^\d+(?:\.\d{0,3})?$/.test(normalized)) return null;
+    const [whole, fraction = ''] = normalized.split('.');
+    return BigInt(whole) * 1000n + BigInt(fraction.padEnd(3, '0'));
+};
+
+const formatPreparationMilliunits = (value) => {
+    const whole = value / 1000n;
+    const fraction = (value % 1000n).toString().padStart(3, '0').replace(/0+$/, '');
+    const grouped = whole.toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+    return fraction ? `${grouped},${fraction}` : grouped;
+};
+
+document.querySelectorAll('[data-preparation-production]').forEach((section) => {
+    const form = section.querySelector('[data-production-form]');
+    const lotsInput = section.querySelector('[data-production-lots]');
+    const submit = section.querySelector('[data-production-submit]');
+    const error = section.querySelector('[data-production-error]');
+    const maximum = BigInt(section.dataset.maximumLots || '0');
+    const yieldPerLot = preparationMilliunits(section.dataset.yieldPerLot) ?? 0n;
+    const outputUnit = section.querySelector('[data-production-output]').textContent.trim().split(' ').at(-1);
+
+    const refresh = () => {
+        const validLots = /^\d+$/.test(lotsInput.value) ? BigInt(lotsInput.value) : 0n;
+        section.querySelectorAll('[data-production-quantity]').forEach((output) => {
+            const perLot = preparationMilliunits(output.dataset.perLot) ?? 0n;
+            output.textContent = formatPreparationMilliunits(perLot * validLots);
+        });
+        section.querySelectorAll('[data-production-output]').forEach((output) => {
+            output.textContent = `${formatPreparationMilliunits(yieldPerLot * validLots)} ${outputUnit}`;
+        });
+        const exceeds = validLots < 1n || validLots > maximum;
+        submit.disabled = exceeds;
+        error.hidden = !exceeds;
+        error.textContent = validLots > maximum
+            ? `La cantidad supera el máximo disponible de ${maximum.toString()} lotes.`
+            : 'Indica al menos un lote.';
+    };
+
+    lotsInput.addEventListener('input', refresh);
+    form.addEventListener('submit', (event) => {
+        refresh();
+        if (submit.disabled) {
+            event.preventDefault();
+            error.focus();
+        }
+    });
+    refresh();
+});
+
+document.querySelectorAll('[data-internal-consumption-form]').forEach((form) => {
+    const list = form.querySelector('[data-internal-pizza-list]');
+    const template = document.querySelector('[data-internal-pizza-template]');
+    let nextIndex = 0;
+
+    const renumber = () => list.querySelectorAll('[data-internal-pizza]').forEach((card, index) => {
+        card.querySelector('[data-pizza-number]').textContent = String(index + 1);
+        card.querySelector('[data-remove-internal-pizza]').hidden = list.querySelectorAll('[data-internal-pizza]').length === 1;
+    });
+
+    const initialize = (card) => {
+        const size = card.querySelector('[data-internal-size]');
+        const count = card.querySelector('[data-internal-section-count]');
+        const rows = [...card.querySelectorAll('[data-internal-section]')];
+        const refresh = () => {
+            if (size.value === 'personal' && Number(count.value) > 1) count.value = '1';
+            [...count.options].forEach((option) => { option.disabled = size.value === 'personal' && Number(option.value) > 1; });
+            const source = card.querySelector(`template[data-internal-options="${CSS.escape(size.value)}"]`);
+            rows.forEach((row, index) => {
+                const select = row.querySelector('[data-internal-variant]');
+                const active = index < Number(count.value);
+                row.hidden = !active;
+                select.disabled = !active;
+                select.required = active;
+                if (active && select.dataset.loadedSize !== size.value) {
+                    select.innerHTML = source?.innerHTML ?? '<option value="">Sin sabores disponibles</option>';
+                    select.dataset.loadedSize = size.value;
+                }
+            });
+        };
+        size.addEventListener('change', refresh);
+        count.addEventListener('change', refresh);
+        card.querySelector('[data-remove-internal-pizza]').addEventListener('click', () => {
+            if (list.querySelectorAll('[data-internal-pizza]').length > 1) card.remove();
+            renumber();
+        });
+        refresh();
+    };
+
+    const add = () => {
+        const wrapper = document.createElement('div');
+        wrapper.innerHTML = template.innerHTML.replaceAll('__INDEX__', String(nextIndex++));
+        const card = wrapper.firstElementChild;
+        list.append(card);
+        initialize(card);
+        renumber();
+    };
+
+    form.querySelector('[data-add-internal-pizza]').addEventListener('click', add);
+    form.addEventListener('submit', (event) => {
+        let valid = true;
+        list.querySelectorAll('[data-internal-pizza]').forEach((card) => {
+            const selects = [...card.querySelectorAll('[data-internal-variant]:not(:disabled)')];
+            selects.forEach((select) => select.setCustomValidity(''));
+            const values = selects.map((select) => select.value);
+            if (new Set(values).size !== values.length) {
+                valid = false;
+                selects[0]?.setCustomValidity('No repitas el mismo sabor en una pizza.');
+            }
+        });
+        if (!valid) event.preventDefault();
+    });
+    add();
+});
