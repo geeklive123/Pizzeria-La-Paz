@@ -42,10 +42,10 @@ class SalesUxAndMixedPaymentsTest extends TestCase
     {
         $this->seed(DatabaseSeeder::class);
         $company = Company::query()->where('name', 'Mi Pizzería')->firstOrFail();
-        $this->ensureDemoPizzaFlavors($company);
         $branch = Branch::query()->where('company_id', $company->id)->where('name', 'Principal')->firstOrFail();
         $owner = Membership::query()->where('company_id', $company->id)->where('role', MembershipRole::Owner)
             ->with('user')->firstOrFail()->user;
+        $this->ensureDemoPizzaFlavors($company, $branch, $owner);
         $order = app(CreateTakeawayOrderAction::class)->execute($company, $branch, $owner);
 
         $response = $this->actingInContext($owner, $company, $branch)->get(route('orders.show', $order->ulid))->assertOk();
